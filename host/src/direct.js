@@ -19,7 +19,7 @@ export function privateBind(ip) {
 
 export function startDirect(host, ip, port = 8787) {
   if (!privateBind(ip)) throw new Error('Direct HTTP must bind to a WireGuard private IPv4 (or 127.0.0.1 for tests)');
-  const peers = new Set();
+  const peers = new Map(); // socket -> {id, watching: session|null}
   const server = http.createServer((req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return; }
     const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -42,7 +42,7 @@ export function startDirect(host, ip, port = 8787) {
   });
   const roster = () => ({ type: 'hosts', hosts: [{ id: host.id,
     sessions: [...host.sessions].map(([id, s]) => ({ id, harness: s.harness })) }] });
-  const announce = () => { for (const ws of peers) send(ws, roster()); };
+  const announce = () => { for (const ws of peers.keys()) send(ws, roster()); };
   wss.on('connection', ws => {
     const timeout = setTimeout(() => ws.close(1008, 'Authentication timeout'), 5000);
     let viewerId;
@@ -50,10 +50,13 @@ export function startDirect(host, ip, port = 8787) {
       let m; try { m = JSON.parse(raw.toString()); } catch { ws.close(1003); return; }
       if (!peers.has(ws)) {
         if (m.type !== 'auth' || m.role !== 'viewer' || !validId(m.id) || m.token !== host.token) { ws.close(1008); return; }
-        clearTimeout(timeout); viewerId = m.id; peers.add(ws); send(ws, { type: 'ready' }); send(ws, roster()); return;
+        clearTimeout(timeout); viewerId = m.id; peers.set(ws, { watching: null }); send(ws, { type: 'ready' }); send(ws, roster()); return;
       }
       if (m.host !== host.id) return;
-      if (m.type === 'pair') {
+      if (m.type === 'watch') {
+        peers.get(ws).watching = validId(m.session) && host.sessions.has(m.session) ? m.session : null;
+        send(ws, { type: 'watching', host: host.id, session: peers.get(ws).watching });
+      } else if (m.type === 'pair') {
         const payload = host.pairing(viewerId);
         if (payload) send(ws, { ...payload, host: host.id });
       } else if (m.type === 'create' && validId(m.session) && ['pi', 'claude'].includes(m.harness)) host.create(m.session, m.harness);
@@ -61,13 +64,14 @@ export function startDirect(host, ip, port = 8787) {
         if (m.type === 'input' && typeof m.data === 'string' && m.data.length <= 8192) host.remote(m);
         else if (m.type === 'resize' && Number.isInteger(m.cols) && Number.isInteger(m.rows)) host.remote(m);
         else if (m.type === 'replay') send(ws, { type: 'output', host: host.id, session: m.session, data: host.sessions.get(m.session).replay });
-        else if (m.type === 'send' && validId(m.to) && typeof m.text === 'string') host.deliver(m.session, m.to, m.text);
+        else if (m.type === 'send' && m.toHost === host.id && validId(m.to) && typeof m.text === 'string')
+          host.deliver(m.session, m.to, m.text);
       }
     });
     ws.on('close', () => { clearTimeout(timeout); peers.delete(ws); });
   });
-  const output = (session, data) => { for (const ws of peers) send(ws, { type: 'output', host: host.id, session, data }); };
-  const message = (session, from, text) => { for (const ws of peers) send(ws, { type: 'message', host: host.id, session, from, text }); };
+  const output = (session, data) => { for (const [ws, p] of peers) if (p.watching === session) send(ws, { type: 'output', host: host.id, session, data }); };
+  const message = (session, from, text) => { for (const [ws, p] of peers) if (p.watching === session) send(ws, { type: 'message', host: host.id, session, from, text }); };
   server.listen(port, ip);
-  return { server, wss, announce, output, message, close: () => { for (const ws of peers) ws.terminate(); wss.close(); server.close(); } };
+  return { server, wss, announce, output, message, close: () => { for (const ws of peers.keys()) ws.terminate(); wss.close(); server.close(); } };
 }

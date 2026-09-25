@@ -45,11 +45,15 @@ export class Relay {
       if (!peer) {
         if (msg.type !== 'auth' || !['host', 'viewer'].includes(msg.role) ||
             !validId(msg.id) || !(await equal(msg.token, this.token)) ||
-            [...this.peers.values()].some(p => p.role === msg.role && p.id === msg.id)) {
+            (msg.role === 'viewer' && [...this.peers.values()].some(p => p.role === 'viewer' && p.id === msg.id))) {
           server.close(1008, 'Unauthorized'); return;
         }
+        // A reconnecting host supersedes its stale socket. A unique host ID is required per machine.
+        if (msg.role === 'host') for (const [old, p] of this.peers) if (p.role === 'host' && p.id === msg.id) {
+          this.peers.delete(old); old.close(1000, 'Replaced by reconnect');
+        }
         clearTimeout(timer);
-        peer = { role: msg.role, id: msg.id, sessions: [] };
+        peer = { role: msg.role, id: msg.id, sessions: [], watching: null }; // viewer subscription: host/session
         this.peers.set(server, peer);
         send(server, { type: 'ready' });
         this.broadcastHosts();
@@ -63,13 +67,20 @@ export class Relay {
       this.peers.delete(server);
       if (peer?.role === 'host') this.broadcastHosts();
     });
-    server.addEventListener('error', () => { clearTimeout(timer); this.peers.delete(server); });
+    server.addEventListener('error', () => {
+      clearTimeout(timer);
+      const peer = this.peers.get(server);
+      this.peers.delete(server);
+      if (peer?.role === 'host') this.broadcastHosts();
+    });
     return new Response(null, { status: 101, webSocket: client });
   }
   broadcastHosts() {
     const hosts = [...this.peers.values()].filter(p => p.role === 'host').map(p => ({ id: p.id, sessions: p.sessions }));
     for (const [ws, peer] of this.peers) if (peer.role === 'viewer') send(ws, { type: 'hosts', hosts });
   }
+  host(id) { return [...this.peers].find(([, p]) => p.role === 'host' && p.id === id); }
+  live(host, session) { return host?.[1].sessions.some(s => s.id === session); }
   route(ws, peer, m) {
     if (peer.role === 'host') {
       if (m.type === 'sessions' && Array.isArray(m.sessions) && m.sessions.length <= 64 &&
@@ -78,9 +89,22 @@ export class Relay {
         this.broadcastHosts();
       } else if (m.type === 'output' && validId(m.session) && typeof m.data === 'string' && m.data.length <= 32768 &&
                  peer.sessions.some(s => s.id === m.session)) {
-        for (const [target, p] of this.peers) if (p.role === 'viewer') send(target, { type: 'output', host: peer.id, session: m.session, data: m.data });
-      } else if (m.type === 'message' && validId(m.session) && typeof m.text === 'string' && m.text.length <= 4096) {
-        for (const [target, p] of this.peers) if (p.role === 'viewer') send(target, { type: 'message', host: peer.id, session: m.session, from: m.from, text: m.text });
+        for (const [target, p] of this.peers) if (p.role === 'viewer' && p.watching?.host === peer.id && p.watching.session === m.session)
+          send(target, { type: 'output', host: peer.id, session: m.session, data: m.data });
+      } else if (m.type === 'replay_output' && validId(m.session) && validId(m.to) &&
+                 typeof m.data === 'string' && m.data.length <= 32768 && peer.sessions.some(s => s.id === m.session)) {
+        for (const [target, p] of this.peers) if (p.role === 'viewer' && p.id === m.to &&
+            p.watching?.host === peer.id && p.watching.session === m.session)
+          send(target, { type: 'output', host: peer.id, session: m.session, data: m.data });
+      } else if (m.type === 'message' && validId(m.session) && typeof m.from === 'string' && m.from.length <= 129 &&
+                 typeof m.text === 'string' && m.text.length <= 4096 && peer.sessions.some(s => s.id === m.session)) {
+        for (const [target, p] of this.peers) if (p.role === 'viewer' && p.watching?.host === peer.id && p.watching.session === m.session)
+          send(target, { type: 'message', host: peer.id, session: m.session, from: m.from, text: m.text });
+      } else if (m.type === 'forward' && validId(m.session) && validId(m.toHost) && validId(m.to) &&
+                 peer.sessions.some(s => s.id === m.session) && typeof m.text === 'string' && m.text.trim() && m.text.length <= 4096) {
+        const destination = this.host(m.toHost);
+        if (this.live(destination, m.to)) send(destination[0], { type: 'deliver', from: `${peer.id}/${m.session}`, to: m.to, text: m.text });
+        else send(ws, { type: 'delivery_error', session: m.session, target: `${m.toHost}/${m.to}`, error: 'Destination offline' });
       } else if (m.type === 'pairing' && validId(m.to) && typeof m.url === 'string' && m.url.length <= 2048 &&
                  (m.wg === null || typeof m.wg === 'string' && m.wg.length <= 8192)) {
         for (const [target, p] of this.peers) if (p.role === 'viewer' && p.id === m.to)
@@ -89,7 +113,12 @@ export class Relay {
       return;
     }
     if (!validId(m.host)) return;
-    const host = [...this.peers].find(([, p]) => p.role === 'host' && p.id === m.host);
+    const host = this.host(m.host);
+    if (m.type === 'watch') {
+      peer.watching = host && this.live(host, m.session) ? { host: m.host, session: m.session } : null;
+      send(ws, { type: 'watching', host: m.host, session: peer.watching?.session ?? null });
+      return;
+    }
     if (!host) return;
     if (m.type === 'pair') { send(host[0], { type: 'pair', to: peer.id }); return; }
     if (m.type === 'create' && ['pi', 'claude'].includes(m.harness) && validId(m.session))
@@ -100,9 +129,16 @@ export class Relay {
       else if (m.type === 'resize' && Number.isInteger(m.cols) && Number.isInteger(m.rows) &&
                m.cols >= 20 && m.cols <= 400 && m.rows >= 5 && m.rows <= 150)
         send(host[0], { type: 'resize', session: m.session, cols: m.cols, rows: m.rows });
-      else if (m.type === 'replay') send(host[0], { type: 'replay', session: m.session });
-      else if (m.type === 'send' && validId(m.to) && typeof m.text === 'string' && m.text.length <= 4096)
-        send(host[0], { type: 'send', session: m.session, to: m.to, text: m.text });
+      else if (m.type === 'replay' && peer.watching?.host === m.host && peer.watching.session === m.session)
+        send(host[0], { type: 'replay', session: m.session, to: peer.id });
+      else if (m.type === 'send' && validId(m.toHost) && validId(m.to) && typeof m.text === 'string' &&
+               m.text.trim() && m.text.length <= 4096) {
+        const destination = this.host(m.toHost);
+        if (this.live(destination, m.to)) {
+          send(destination[0], { type: 'deliver', from: `${m.host}/${m.session}`, to: m.to, text: m.text });
+          send(ws, { type: 'sent', target: `${m.toHost}/${m.to}` });
+        } else send(ws, { type: 'delivery_error', target: `${m.toHost}/${m.to}`, error: 'Destination offline' });
+      }
     }
   }
 }

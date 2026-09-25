@@ -107,19 +107,38 @@ export class Host {
   }
   remote(m) {
     if (m.type === 'pair') { const payload = this.pairing(m.to); if (payload) send(this.ws, payload); return; }
+    if (m.type === 'delivery_error' && validId(m.session)) {
+      this.receive('teleporter', m.session, `${m.target}: ${m.error}`); return;
+    }
     if (m.type === 'create') { this.create(m.session, m.harness); return; }
+    if (m.type === 'deliver') {
+      if (typeof m.from === 'string' && /^[a-zA-Z0-9_-]{1,64}\/[a-zA-Z0-9_-]{1,64}$/.test(m.from))
+        this.receive(m.from, m.to, m.text);
+      return;
+    }
     if (!validId(m.session)) return;
     const s = this.sessions.get(m.session);
     if (!s) return;
     try {
       if (m.type === 'input' && typeof m.data === 'string' && m.data.length <= 8192) s.term.write(m.data);
       else if (m.type === 'resize' && Number.isInteger(m.cols) && Number.isInteger(m.rows) && m.cols >= 20 && m.cols <= 400 && m.rows >= 5 && m.rows <= 150) s.term.resize(m.cols, m.rows);
-      else if (m.type === 'replay') send(this.ws, { type: 'output', session: m.session, data: s.replay });
-      else if (m.type === 'send' && validId(m.to) && typeof m.text === 'string') this.deliver(m.session, m.to, m.text);
+      else if (m.type === 'replay' && validId(m.to)) send(this.ws, { type: 'replay_output', to: m.to, session: m.session, data: s.replay });
     } catch (e) { console.error('PTY:', e.message); }
   }
   deliver(from, to, text) {
-    if (!validId(from) || !validId(to) || !this.sessions.has(from) || !this.sessions.has(to) || typeof text !== 'string' || !text.trim() || text.length > 4096) return false;
+    if (!validId(from) || !this.sessions.has(from) || typeof text !== 'string' || !text.trim() || text.length > 4096) return false;
+    const parts = to?.split('/');
+    if (parts?.length === 2 && validId(parts[0]) && validId(parts[1])) {
+      if (parts[0] === this.id) return this.receive(`${this.id}/${from}`, parts[1], text);
+      if (this.ws?.readyState !== WebSocket.OPEN) return false;
+      send(this.ws, { type: 'forward', session: from, toHost: parts[0], to: parts[1], text });
+      return true; // Accepted for routing; offline destinations return a delivery_error asynchronously.
+    }
+    return this.receive(`${this.id}/${from}`, to, text);
+  }
+  receive(from, to, text) {
+    if (!validId(to) || !this.sessions.has(to) || typeof from !== 'string' || from.length > 129 ||
+        typeof text !== 'string' || !text.trim() || text.length > 4096) return false;
     const msg = { type: 'message', id: randomUUID(), from, to, text, at: new Date().toISOString() };
     const inbox = this.messages.get(to) || [];
     inbox.push(msg); if (inbox.length > 100) inbox.shift(); this.messages.set(to, inbox);
