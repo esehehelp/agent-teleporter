@@ -1,0 +1,8 @@
+{
+  "name": "agent-teleporter",
+  "main": "src/index.js",
+  "compatibility_date": "2025-04-01",
+  "durable_objects": { "bindings": [{ "name": "RELAY", "class_name": "Relay" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }],
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/ws"] }
+}

@@ -1,0 +1,8 @@
+node_modules/
+worker/.dev.vars
+worker/.wrangler/
+.wrangler/
+android/.gradle/
+android/local.properties
+android/**/build/
+*.log
