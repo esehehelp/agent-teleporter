@@ -34,6 +34,9 @@ test('local WireGuard transport serves UI and routes authorized terminal input',
     });
     ws.send(JSON.stringify({ type: 'auth', role: 'viewer', id: 'mobile', token: 'test' }));
     assert.deepEqual((await initial).map(m => m.type), ['ready', 'hosts']);
+    const pairing = new Promise(resolve => ws.once('message', raw => resolve(JSON.parse(raw.toString()))));
+    ws.send(JSON.stringify({ type: 'pair', host: host.id }));
+    assert.match((await pairing).url, /#token=test$/);
     ws.send(JSON.stringify({ type: 'input', host: host.id, session: 'alpha', data: 'prompt\r' }));
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.deepEqual(input, ['prompt\r']);

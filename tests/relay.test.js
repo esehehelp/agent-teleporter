@@ -28,6 +28,7 @@ test('relay authenticates, routes PTY commands and prevents host spoofing', asyn
   const bad = await open('bad', 'viewer', 'wrong'); assert.equal(bad.code, 1008);
   const host = await open('laptop', 'host');
   const viewer = await open('phone', 'viewer');
+  const other = await open('tablet', 'viewer');
   assert.ok(viewer.sent.some(m => m.type === 'hosts'));
   viewer.receive({ type: 'create', host: 'laptop', session: 'a', harness: 'pi' });
   assert.ok(host.sent.some(m => m.type === 'create' && m.session === 'a'));
@@ -38,7 +39,12 @@ test('relay authenticates, routes PTY commands and prevents host spoofing', asyn
   assert.ok(!host.sent.some(m => m.data === 'wrong'));
   host.receive({ type: 'output', session: 'a', data: 'hello' });
   assert.ok(viewer.sent.some(m => m.type === 'output' && m.data === 'hello'));
-  host.close(); viewer.close();
+  viewer.receive({ type: 'pair', host: 'laptop' });
+  assert.ok(host.sent.some(m => m.type === 'pair' && m.to === 'phone'));
+  host.receive({ type: 'pairing', to: 'phone', url: 'http://10.77.0.1:8787/#token=secret', wg: '[Interface]' });
+  assert.ok(viewer.sent.some(m => m.type === 'pairing' && m.wg === '[Interface]'));
+  assert.ok(!other.sent.some(m => m.type === 'pairing'));
+  host.close(); viewer.close(); other.close();
 });
 
 test('host messages reach local subscribers and are bounded', () => {

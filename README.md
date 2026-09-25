@@ -18,7 +18,7 @@ TELEPORTER_URL=wss://agent-teleporter.<account>.workers.dev/ws \
 TELEPORTER_TOKEN='<同じ乱数>' TELEPORTER_CWD="$HOME/Work/project" npm run host
 ```
 
-公開 URL をブラウザ / Android Chrome で開き、トークンを入力して Connect → New session。Android Chrome のメニューから「ホーム画面に追加」で PWA として起動できます。ネイティブ Android クライアントも `android/` にあります（Android Studio で開き、HTTPS の Worker URL を指定）。トークンはページメモリだけに保持され、再読込時に再入力が必要です。複数セッションを作成してターミナル切り替え、リサイズ、キー操作が可能です。再接続後は直近 32 Ki 文字の PTY 出力を再表示します。
+公開 URL をブラウザ / Android Chrome で開き、トークンを入力して Connect → New session。Android Chrome のメニューから「ホーム画面に追加」で PWA として起動できます。ネイティブ Android クライアントも `android/` にあります（Android Studio で開く。Google Play services Code Scanner を使った **Scan connection QR** ボタンを搭載。先に WireGuard アプリで VPN 設定 QR を読み込み、トンネルを ON にしてください）。トークンはページメモリだけに保持され、再読込時に再入力が必要です。複数セッションを作成してターミナル切り替え、リサイズ、キー操作が可能です。再接続後は直近 32 Ki 文字の PTY 出力を再表示します。
 
 ### WireGuard + QR（Worker 不要の直接接続）
 
@@ -34,7 +34,7 @@ TELEPORTER_BIND=10.77.0.1 TELEPORTER_TOKEN='<長い乱数>' TELEPORTER_CWD="$HOM
 TELEPORTER_TOKEN='<同じ乱数>' node host/src/cli.js qr http://10.77.0.1:8787/
 ```
 
-Android が WireGuard に接続済みなら `http://10.77.0.1:8787/` を開けます。二つ目の QR は URL の **fragment** にトークンを入れ（HTTP リクエストには送られません）、表示後ブラウザの履歴から削除します。**QR を撮影・共有すると VPN の秘密鍵または操作権限が漏れます。** ネイティブ `android/` アプリにもこの HTTP URL を入力できます。ローカル専用経路は WireGuard の暗号化を前提とし、WireGuard インターフェースのプライベート IPv4 にしか bind しません。Worker 経由との同時利用も可能です（`TELEPORTER_URL` と `TELEPORTER_BIND` を両方設定）。
+Android が WireGuard に接続済みなら `http://10.77.0.1:8787/` を開けます。二つ目の QR は URL の **fragment** にトークンを入れ（HTTP リクエストには送られません）、表示後ブラウザの履歴から削除します。Web UI にログイン後、**Pair Android** を押して両方の QR を画面表示することもできます。WireGuard 設定 QR を有効化するにはホスト起動時に `TELEPORTER_WG_CLIENT_CONFIG="$HOME/.config/agent-teleporter-wg/android.conf"` を追加してください。これを有効化すると共有トークンで認証したブラウザにクライアントの VPN 秘密鍵を渡せるため、信頼できる利用者だけにトークンを配布してください。**QR を撮影・共有すると VPN の秘密鍵または操作権限が漏れます。** ネイティブ `android/` アプリにもこの HTTP URL を入力できます。ローカル専用経路は WireGuard の暗号化を前提とし、WireGuard インターフェースのプライベート IPv4 にしか bind しません。Worker 経由との同時利用も可能です（`TELEPORTER_URL` と `TELEPORTER_BIND` を両方設定）。
 
 疎通確認: Android で WireGuard の handshake を確認し、VPN 上でページを開いて Connect / New session。サーバーでは `sudo wg show`、クライアント側で `10.77.0.1` に接続できることを確認。必要な受信ポートは VPN 用 UDP 51820 のみで、TCP 8787 は公開インターフェースで listen しません。ホストの firewall で WireGuard インターフェースからの TCP 8787 を許可してください。
 
@@ -63,5 +63,7 @@ Android が WireGuard に接続済みなら `http://10.77.0.1:8787/` を開け�
 npm test
 npm run build
 ```
+
+Google アカウント同期は未実装です。MCP は構築時の操作ツールであり、実行時のログイン／同期には使いません。実装には Google OAuth Client ID と同期対象（設定のみ、またはセッション履歴など）の決定が必要です。この環境では Cloudflare / Google MCP ツールは提供されていませんが、Wrangler CLI による Cloudflare Worker の公開・secret 設定は可能です。
 
 `ref/` は既存実装がないことの記録です。Wire protocol: 最初の JSON frame は `{type:"auth",role:"host"|"viewer",id,token}`。以降 viewer は `create/input/resize/replay/send`、host は `sessions/output/message` を送信します。認証、ID・サイズの検証と宛先ルーティングは Durable Object で行います。

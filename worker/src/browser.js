@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import QRCode from 'qrcode';
 import '@xterm/xterm/css/xterm.css';
 const $ = id => document.getElementById(id);
 const term = new Terminal({ cursorBlink: true, fontSize: 14, scrollback: 3000, theme: { background: '#111827' } });
@@ -35,6 +36,13 @@ function connect() {
     if (m.type === 'ready') { state.ready = true; $('status').textContent = 'Connected'; $('login').hidden = true; }
     if (m.type === 'hosts') { state.hosts = m.hosts; render(); }
     if (m.type === 'output' && m.host === state.host && m.session === state.session) term.write(m.data);
+    if (m.type === 'pairing' && m.host === state.host) {
+      $('wg-qr').replaceChildren(); $('url-qr').replaceChildren();
+      $('pairing').hidden = false;
+      if (m.wg) drawQR($('wg-qr'), m.wg);
+      else $('wg-qr').textContent = 'WireGuard 設定なし（ホスト側で TELEPORTER_WG_CLIENT_CONFIG を設定してください）';
+      drawQR($('url-qr'), m.url);
+    }
     if (m.type === 'message' && m.host === state.host) {
       const entry = document.createElement('div'); entry.textContent = `[${m.session}] ${m.from}: ${m.text}`; $('log').prepend(entry);
       while ($('log').children.length > 100) $('log').lastChild.remove();
@@ -45,7 +53,15 @@ function connect() {
     if (e.code !== 1008 && e.code !== 1009) state.retry = setTimeout(connect, 3000);
   };
 }
+function drawQR(container, data) {
+  const canvas = document.createElement('canvas'); container.append(canvas);
+  QRCode.toCanvas(canvas, data, { errorCorrectionLevel: 'L', margin: 2, width: 300 }, error => {
+    if (error) container.textContent = `QR generation failed: ${error.message}`;
+  });
+}
 $('connect').onclick = () => { if ($('token').value) connect(); };
+$('pair').onclick = () => { if (state.host) emit({ type: 'pair', host: state.host }); };
+$('close-pair').onclick = () => { $('pairing').hidden = true; $('wg-qr').replaceChildren(); $('url-qr').replaceChildren(); };
 // QR pairing secret lives only in the fragment (never sent to the HTTP server).
 const pairing = new URLSearchParams(location.hash.slice(1)).get('token');
 if (pairing) { $('token').value = pairing; history.replaceState(null, '', location.pathname + location.search); connect(); }

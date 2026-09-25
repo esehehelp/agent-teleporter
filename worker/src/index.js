@@ -44,7 +44,8 @@ export class Relay {
       let peer = this.peers.get(server);
       if (!peer) {
         if (msg.type !== 'auth' || !['host', 'viewer'].includes(msg.role) ||
-            !validId(msg.id) || !(await equal(msg.token, this.token))) {
+            !validId(msg.id) || !(await equal(msg.token, this.token)) ||
+            [...this.peers.values()].some(p => p.role === msg.role && p.id === msg.id)) {
           server.close(1008, 'Unauthorized'); return;
         }
         clearTimeout(timer);
@@ -80,12 +81,17 @@ export class Relay {
         for (const [target, p] of this.peers) if (p.role === 'viewer') send(target, { type: 'output', host: peer.id, session: m.session, data: m.data });
       } else if (m.type === 'message' && validId(m.session) && typeof m.text === 'string' && m.text.length <= 4096) {
         for (const [target, p] of this.peers) if (p.role === 'viewer') send(target, { type: 'message', host: peer.id, session: m.session, from: m.from, text: m.text });
+      } else if (m.type === 'pairing' && validId(m.to) && typeof m.url === 'string' && m.url.length <= 2048 &&
+                 (m.wg === null || typeof m.wg === 'string' && m.wg.length <= 8192)) {
+        for (const [target, p] of this.peers) if (p.role === 'viewer' && p.id === m.to)
+          send(target, { type: 'pairing', host: peer.id, url: m.url, wg: m.wg });
       }
       return;
     }
     if (!validId(m.host)) return;
     const host = [...this.peers].find(([, p]) => p.role === 'host' && p.id === m.host);
     if (!host) return;
+    if (m.type === 'pair') { send(host[0], { type: 'pair', to: peer.id }); return; }
     if (m.type === 'create' && ['pi', 'claude'].includes(m.harness) && validId(m.session))
       send(host[0], { type: 'create', session: m.session, harness: m.harness });
     else if (validId(m.session) && host[1].sessions.some(s => s.id === m.session)) {

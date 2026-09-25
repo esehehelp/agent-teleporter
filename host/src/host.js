@@ -90,7 +90,23 @@ export class Host {
     });
     this.announce(); return true;
   }
+  pairing(to) {
+    if (!validId(to)) return null;
+    const base = this.bind ? `http://${this.bind}:${this.port}/` : this.url?.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/ws$/, '/');
+    if (!base) return null;
+    const url = new URL(base);
+    url.hash = `token=${encodeURIComponent(this.token)}`;
+    let wg = null;
+    if (process.env.TELEPORTER_WG_CLIENT_CONFIG) {
+      try {
+        const file = process.env.TELEPORTER_WG_CLIENT_CONFIG;
+        if (fs.statSync(file).size <= 8192) wg = fs.readFileSync(file, 'utf8');
+      } catch (e) { console.error('Pairing config unavailable:', e.message); }
+    }
+    return { type: 'pairing', to, url: url.toString(), wg };
+  }
   remote(m) {
+    if (m.type === 'pair') { const payload = this.pairing(m.to); if (payload) send(this.ws, payload); return; }
     if (m.type === 'create') { this.create(m.session, m.harness); return; }
     if (!validId(m.session)) return;
     const s = this.sessions.get(m.session);

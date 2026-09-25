@@ -45,14 +45,18 @@ export function startDirect(host, ip, port = 8787) {
   const announce = () => { for (const ws of peers) send(ws, roster()); };
   wss.on('connection', ws => {
     const timeout = setTimeout(() => ws.close(1008, 'Authentication timeout'), 5000);
+    let viewerId;
     ws.on('message', raw => {
       let m; try { m = JSON.parse(raw.toString()); } catch { ws.close(1003); return; }
       if (!peers.has(ws)) {
         if (m.type !== 'auth' || m.role !== 'viewer' || !validId(m.id) || m.token !== host.token) { ws.close(1008); return; }
-        clearTimeout(timeout); peers.add(ws); send(ws, { type: 'ready' }); send(ws, roster()); return;
+        clearTimeout(timeout); viewerId = m.id; peers.add(ws); send(ws, { type: 'ready' }); send(ws, roster()); return;
       }
       if (m.host !== host.id) return;
-      if (m.type === 'create' && validId(m.session) && ['pi', 'claude'].includes(m.harness)) host.create(m.session, m.harness);
+      if (m.type === 'pair') {
+        const payload = host.pairing(viewerId);
+        if (payload) send(ws, { ...payload, host: host.id });
+      } else if (m.type === 'create' && validId(m.session) && ['pi', 'claude'].includes(m.harness)) host.create(m.session, m.harness);
       else if (validId(m.session) && host.sessions.has(m.session)) {
         if (m.type === 'input' && typeof m.data === 'string' && m.data.length <= 8192) host.remote(m);
         else if (m.type === 'resize' && Number.isInteger(m.cols) && Number.isInteger(m.rows)) host.remote(m);

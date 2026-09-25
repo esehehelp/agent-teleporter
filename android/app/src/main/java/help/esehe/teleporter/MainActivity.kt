@@ -1,6 +1,8 @@
 package help.esehe.teleporter
 
 import android.app.Activity
+import android.app.AlertDialog
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import android.os.Bundle
 import android.view.View
 import android.webkit.WebResourceRequest
@@ -28,6 +30,7 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val address = EditText(this).apply { hint = "http://10.77.0.1:8787/#token=…"; singleLine = true }
         val button = Button(this).apply { text = "Connect" }
+        val scan = Button(this).apply { text = "Scan connection QR" }
         browser = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = false // token stays in page memory only
@@ -44,13 +47,27 @@ class MainActivity : Activity() {
         }
         layout.addView(address)
         layout.addView(button)
+        layout.addView(scan)
         layout.addView(browser, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(layout)
+        scan.setOnClickListener {
+            GmsBarcodeScanning.getClient(this).startScan()
+                .addOnSuccessListener { barcode ->
+                    val value = barcode.rawValue ?: return@addOnSuccessListener
+                    if (value.startsWith("[Interface]")) {
+                        AlertDialog.Builder(this).setMessage("WireGuard QR は WireGuard アプリで読み込んでください。VPN を ON にした後、このアプリで Connection QR をスキャンします。")
+                            .setPositiveButton("OK", null).show()
+                    } else {
+                        address.setText(value)
+                        if (safeUrl(Uri.parse(value))) button.performClick() else address.error = "Invalid pairing URL"
+                    }
+                }.addOnFailureListener { address.error = "QR scan failed: ${it.message}" }
+        }
         button.setOnClickListener {
             val uri = Uri.parse(address.text.toString().trim())
             if (safeUrl(uri)) {
                 browser.loadUrl(uri.buildUpon().path("/").clearQuery().build().toString())
-                address.visibility = View.GONE; button.visibility = View.GONE
+                address.visibility = View.GONE; button.visibility = View.GONE; scan.visibility = View.GONE
             } else address.error = "HTTPS or private WireGuard IPv4 HTTP URL required"
         }
     }
